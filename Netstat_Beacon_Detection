@@ -1,0 +1,21 @@
+#This script is a simple .ps1 script for detecting beacons that only appear for a second in netstats.
+
+$cred = Get-Credentials
+Invoke-Command -Computer [Computer Name] -Crednedial $cred -Scriptblock { 
+while($true)
+{
+    echo "=================Net Stat==============================" > C:\Users\[User]\Desktop\Netstat.txt
+    netstat -anob >> C:\Users\[User]\Desktop\Netstat.txt
+    sleep 1
+    echo "=================Net Stat==============================" > C:\Users\[User]\Desktop\Netstat2.txt
+    netstat -anob >> C:\Users\[User]\Desktop\Netstat2.txt 
+    sleep 1 
+    Compare-Object (Get-Content C:\Users\[User]\Desktop\Netstat.txt) (Get-Content C:\Users\[User]\Desktop\Netstat2.txt) >> C:\Users\[User]\Desktop\NetStatDiff.txt
+    sleep 1
+    clear
+    echo "Script Running Please do not Kill
+A File has been placed on your desktop called Netstatdiff.txt.
+A quick summary of the Output will display in your shell"
+    Get-Content C:\Users\[User]\Desktop\NetStatDiff.txt
+}
+}
