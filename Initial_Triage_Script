@@ -1,0 +1,35 @@
+$cred = get-credentials
+
+invoke-command -computer [Compuer name] -Credential $cred -ScriptBlock 
+{
+echo "======Dir Walks======" > C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-ChildItem -Path "C:\Users\[User2]\" -Recurse >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Suspis Executables======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-ChildItem -Path ">> C:\Users\[User]\" -Recurse | Select-Strings "(.+\.exe|.+\.ps1(xml)?|.+\.ps2(xml)?|.+\.psc(1|2)|.+\.py|.+\.pif|.+\.msi|.+\.scr|.+\.hta|.+\.chm|.+\.jar|.+\.bat|.+\.cmd|.+\.vb(s)?|.+\.reg|.+\.inf|.+\.) >> C:\Users\[User]\Desktop\DiscoveryOutput.txt
+echo "======Net Stats======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Net Stat -anob >> C:\Users\[user]\Desktop\Discoveryoutput.txt
+echo "======Net Start======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Net start >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Get Service======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-Service >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======User Accounts======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-LocalUser >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Get Services======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-Service | select-object Name, Displayname, status, starttype >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Get Running Processes======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-Process | Selec-Object CreationDate, StartTime, ProcessName, ID, Path >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Get Scheduled Tasks======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-SchedulesTask | select-object TaskName, TaskPath, Date, Author, Actions, Triggers, Description, State | where Author -NotLike 'Microsoft' | where Author -NotLike '*@%SystemRoot%\*' >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Schedules Jobs======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-ScheduledJob >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+ehco "======Firewall status======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-FirewallProfile -All >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Event Logs======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-Eventlogs -Before "mm/dd/yyy" -After "mm/dd/yyyy" -Logname "Security" -Message "<String>" | fl >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Registry Run keys Current User======" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Recurse >> C:\Users\[User]\Desktop\DiscoverOutput.txt 
+Get-ChildItem -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Recurse >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+echo "======Registry Run Keys Local Machine=====" >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-ChildItem -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\Run" -Recurse >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+Get-ChildItem -Path "HKLM:\Software\Microsoft\Windows\CurrentVersion\RunOnce" -Recurse >> C:\Users\[User]\Desktop\DiscoverOutput.txt
+}
