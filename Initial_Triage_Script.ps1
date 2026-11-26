@@ -9,6 +9,12 @@
     local host or a remote host over WinRM, and saves the results to a
     timestamped zip on the operator's Desktop.
 
+    Also covers process command lines, Defender detections, additional
+    persistence (Startup, Winlogon, IFEO, AppInit), network configuration,
+    execution history, service paths, BITS/shares/admins, and deeper checks
+    (recent installs, browser extensions, alternate data streams, USB
+    history, root certificates).
+
     Run locally or remotely; pick a Quick, Deep, or Custom profile to choose
     what gets collected.
 
@@ -51,7 +57,7 @@ switch ($profileChoice) {
     '2' { $selection = '11'; $collectAll = $true }
     default {
         Write-Host "Select data to collect:" -ForegroundColor Cyan
-        $menu = @("1. System Info","2. Directory Walk","3. Suspicious Executables","4. Network Info","5. Services","6. User Accounts","7. Processes","8. Scheduled Tasks","9. Registry & WMI","10. Event Logs","11. All of the above")
+        $menu = @("1. System Info","2. Directory Walk","3. Suspicious Executables","4. Network Info","5. Services","6. User Accounts","7. Processes","8. Scheduled Tasks","9. Registry & WMI","10. Event Logs","11. All of the above","12. Process Command Lines","13. Defender Status & Detections","14. Suspicious Process Paths","15. Additional Persistence","16. Network Configuration","17. Execution History","18. Service Binary Paths","19. BITS Jobs, Shares & Admins","20. Deeper Checks")
         $menu | ForEach-Object { Write-Host $_ }
         $selection = Read-Host "Enter numbers separated by commas (e.g., 1,3,5 or 11)"
         $collectAll = ($selection -split ',' | ForEach-Object { $_.Trim() }) -contains '11'
@@ -99,7 +105,19 @@ $collectScript = {
     })
     $data += @(Add-TriageBlock 8 "Scheduled Jobs" { Get-ScheduledJob | Out-String })
     $data += @(Add-TriageBlock 9 "Firewall Status" { Get-NetFirewallProfile | Out-String })
-    $data += @(Add-TriageBlock 10 "Event Logs" { Get-WinEvent -LogName Security -MaxEvents 500 | Format-List | Out-String })
+    $data += @(Add-TriageBlock 10 "Event Logs (Targeted, last 48h)" {
+        $eventFilter = @{ LogName = 'Security'; StartTime = (Get-Date).AddDays(-2) }
+        $targetIds = @(4625, 4672, 4720, 4697, 7045)
+        Get-WinEvent -FilterHashtable $eventFilter -ErrorAction SilentlyContinue |
+            Where-Object { $targetIds -contains $_.Id } |
+            Select-Object TimeCreated, Id, LevelDisplayName, Message | Format-List | Out-String
+        "--- RDP Logons (4624 Type 10, last 48h) ---"
+        try {
+            Get-WinEvent -FilterHashtable $eventFilter -ErrorAction SilentlyContinue |
+                Where-Object { $_.Id -eq 4624 -and $_.Properties[8].Value -eq 10 } |
+                Select-Object TimeCreated, Message | Format-List | Out-String
+        } catch { "[Error] RDP logon query failed: $_" }
+    })
     $data += @(Add-TriageBlock 9 "Registry Run Keys (Current User)" {
         Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" | Out-String
         Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\RunOnce" | Out-String
@@ -136,6 +154,133 @@ $collectScript = {
         Get-MpPreference | Select-Object ExclusionPath, ExclusionExtension, ExclusionProcess | Out-String
     })
 
+    $data += @(Add-TriageBlock 12 "Process Command Lines" {
+        $suspiciousPatterns = @('-enc', '-EncodedCommand', 'DownloadString', 'Invoke-Expression', '\bIEX\b', 'WindowStyle Hidden', '-w hidden', 'FromBase64String', 'rundll32', 'mshta', 'regsvr32', 'certutil.*-urlcache', 'bitsadmin', 'wscript', 'cscript', 'Net.WebClient', 'DownloadFile')
+        Get-CimInstance Win32_Process | ForEach-Object {
+            $flag = ""
+            foreach ($pat in $suspiciousPatterns) {
+                if ($_.CommandLine -and $_.CommandLine -match $pat) { $flag = " [SUSPICIOUS: $pat]"; break }
+            }
+            "$($_.Name) (PID $($_.ProcessId), Parent $($_.ParentProcessId))$flag`n  Path: $($_.ExecutablePath)`n  Cmd: $($_.CommandLine)"
+        } | Out-String
+    })
+    $data += @(Add-TriageBlock 13 "Defender Status & Detections" {
+        Get-MpComputerStatus | Select-Object AntivirusEnabled, RealTimeProtectionEnabled, AMServiceEnabled, AntivirusSignatureLastUpdated, QuickScanAge, FullScanAge | Out-String
+        Get-MpThreatDetection | Select-Object ThreatID, ThreatName, SeverityID, DetectionTime, Resources | Out-String
+    })
+    $data += @(Add-TriageBlock 14 "Suspicious Process Paths" {
+        $systemBinaries = @('smss.exe','csrss.exe','wininit.exe','winlogon.exe','services.exe','lsass.exe','svchost.exe','spoolsv.exe','dwm.exe','explorer.exe','taskhost.exe','taskhostw.exe','dllhost.exe','conhost.exe','fontdrvhost.exe','sihost.exe')
+        $systemDirs = @("$env:SystemRoot\System32", "$env:SystemRoot\SysWOW64", "$env:SystemRoot")
+        "--- Known system binaries running outside System32 / SysWOW64, or image missing from disk ---"
+        Get-CimInstance Win32_Process | Where-Object {
+            $_.ExecutablePath -and (
+                ($systemBinaries -contains $_.Name -and ($systemDirs -notcontains (Split-Path $_.ExecutablePath -Parent))) -or
+                (-not (Test-Path $_.ExecutablePath))
+            )
+        } | Select-Object Name, ProcessId, ParentProcessId, ExecutablePath | Out-String
+        "--- Processes with no image path (includes protected system processes; investigate unfamiliar names) ---"
+        Get-CimInstance Win32_Process | Where-Object { -not $_.ExecutablePath } |
+            Select-Object Name, ProcessId, ParentProcessId | Out-String
+    })
+    $data += @(Add-TriageBlock 15 "Additional Persistence" {
+        "--- Startup Folders ---"
+        Get-ChildItem "$env:ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp" -ErrorAction SilentlyContinue | Select-Object Name, FullName | Out-String
+        Get-ChildItem "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup" -ErrorAction SilentlyContinue | Select-Object Name, FullName | Out-String
+        "--- Winlogon ---"
+        Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -ErrorAction SilentlyContinue | Select-Object Shell, Userinit | Out-String
+        "--- IFEO Debugger Hijacks ---"
+        Get-ChildItem "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options" -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue | Where-Object { $_.Debugger } | Select-Object @{N='Image';E={$_.PSChildName}}, Debugger } | Out-String
+        "--- AppInit DLLs ---"
+        Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows" -ErrorAction SilentlyContinue | Select-Object AppInit_DLLs, LoadAppInit_DLLs | Out-String
+    })
+    $data += @(Add-TriageBlock 16 "Network Configuration" {
+        "--- Hosts File (non-comment lines) ---"
+        Get-Content "$env:SystemRoot\System32\drivers\etc\hosts" -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S' } | Out-String
+        "--- Proxy Settings ---"
+        Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction SilentlyContinue | Select-Object ProxyEnable, ProxyServer, ProxyOverride, AutoConfigURL | Out-String
+        "--- ARP Table ---"
+        arp -a | Out-String
+        "--- Route Table ---"
+        route print | Out-String
+    })
+    $data += @(Add-TriageBlock 17 "Execution History" {
+        "--- PowerShell Console History (last 200 lines) ---"
+        try { $historyPath = (Get-PSReadLineOption).HistorySavePath } catch { $historyPath = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt" }
+        if ($historyPath -and (Test-Path $historyPath)) { Get-Content $historyPath -Tail 200 -ErrorAction SilentlyContinue | Out-String }
+        "--- RunMRU ---"
+        Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU" -ErrorAction SilentlyContinue | Out-String
+        "--- RecentDocs ---"
+        $recentDocs = Get-Item "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs" -ErrorAction SilentlyContinue
+        if ($recentDocs) { $recentDocs.GetValueNames() | Out-String }
+    })
+    $data += @(Add-TriageBlock 18 "Service Binary Paths" {
+        $writableRoots = @("$env:TEMP", "$env:TMP", "$env:APPDATA", "$env:LOCALAPPDATA", "$env:PUBLIC", "$env:SystemDrive\Users\Public", "C:\ProgramData")
+        Get-CimInstance Win32_Service | ForEach-Object {
+            $flag = ""
+            if ($_.PathName) {
+                if ($_.PathName -match '^"([^"]+)"') { $exePath = $Matches[1] } else { $exePath = ($_.PathName -split '\s+')[0] }
+                foreach ($root in $writableRoots) {
+                    if ($exePath -like "$root*") { $flag = " [SUSPICIOUS PATH]"; break }
+                }
+            }
+            "$($_.Name) ($($_.DisplayName)) - $($_.State)/$($_.StartMode)$flag`n  Path: $($_.PathName)"
+        } | Out-String
+    })
+    $data += @(Add-TriageBlock 19 "BITS Jobs, Shares & Admins" {
+        "--- BITS Jobs ---"
+        Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue | Select-Object DisplayName, JobState, OwnerAccount | Out-String
+        "--- SMB Shares ---"
+        Get-SmbShare -ErrorAction SilentlyContinue | Select-Object Name, Path, Description | Out-String
+        "--- Local Administrators ---"
+        Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue | Select-Object Name, PrincipalSource, ObjectClass | Out-String
+        "--- Accounts with password set in last 30 days (new or recently changed) ---"
+        Get-LocalUser -ErrorAction SilentlyContinue | Where-Object { $_.PasswordLastSet -gt (Get-Date).AddDays(-30) } |
+            Select-Object Name, Enabled, PasswordLastSet, LastLogon | Out-String
+    })
+    $data += @(Add-TriageBlock 20 "Deeper Checks" {
+        "--- Installed Programs (last 7 days) ---"
+        $cutoff = (Get-Date).AddDays(-7).ToString('yyyyMMdd')
+        $uninstallPaths = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+            "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*"
+        )
+        Get-ItemProperty $uninstallPaths -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -and $_.InstallDate -match '^\d{8}$' -and $_.InstallDate -ge $cutoff } |
+            Select-Object DisplayName, DisplayVersion, InstallDate, Publisher | Out-String
+        "--- Browser Extensions ---"
+        foreach ($browserPath in @("$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Extensions", "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Extensions")) {
+            if (Test-Path $browserPath) {
+                Get-ChildItem $browserPath -ErrorAction SilentlyContinue | ForEach-Object {
+                    $manifest = Get-ChildItem $_.FullName -Recurse -Filter "manifest.json" -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($manifest) {
+                        $info = Get-Content $manifest.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
+                        "$($_.Name): $($info.name) v$($info.version)"
+                    } else { "$($_.Name): (no manifest found)" }
+                } | Out-String
+            }
+        }
+        "--- Alternate Data Streams (Temp / AppData) ---"
+        foreach ($scanPath in @($env:TEMP, "$env:LOCALAPPDATA\Temp", $env:APPDATA)) {
+            if ($scanPath -and (Test-Path $scanPath)) {
+                Get-ChildItem -Path $scanPath -Recurse -Stream * -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Stream -ne ':$DATA' } |
+                    Select-Object PSPath, Stream, Length | Out-String
+            }
+        }
+        "--- USB Device History ---"
+        Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Enum\USBSTOR" -ErrorAction SilentlyContinue |
+            Select-Object PSChildName | Out-String
+        "--- Root Certificate Store (self-signed / non-standard issuers; heuristic, a baseline comparison is better) ---"
+        $knownIssuers = @('Microsoft', 'DigiCert', 'Sectigo', 'GlobalSign', 'Entrust', 'GoDaddy', 'Let''s Encrypt', 'COMODO', 'VeriSign', 'Thawte', 'GeoTrust', 'QuoVadis', 'IdenTrust', 'Starfield', 'Amazon', 'Google')
+        Get-ChildItem "Cert:\LocalMachine\Root" -ErrorAction SilentlyContinue | ForEach-Object {
+            $issuer = $_.Issuer
+            $known = $false
+            foreach ($k in $knownIssuers) { if ($issuer -match [regex]::Escape($k)) { $known = $true; break } }
+            if (-not $known) { "$($_.Thumbprint) | Subject: $($_.Subject) | Issuer: $issuer | Expires: $($_.NotAfter)" }
+        } | Out-String
+    })
     $data += "====== Triage Script Completed: $(Get-Date) ======"
     return $data
 }

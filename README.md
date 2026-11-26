@@ -6,7 +6,7 @@ PowerShell scripts for host-based incident response triage, built for IR classes
 
 | Script | What it does |
 | ------ | ------------ |
-| `Initial_Triage_Script.ps1` | Collects system info, processes, network state, users, services, scheduled tasks, registry/WMI persistence, event logs and more from the local host or a remote host over WinRM. Saves a timestamped zip on the operator's Desktop. |
+| `Initial_Triage_Script.ps1` | Collects system info, processes, network state, users, services, scheduled tasks, registry/WMI persistence, event logs and more — including process command lines, Defender detections, additional persistence, execution history, and deeper checks (recent installs, browser extensions, alternate data streams, USB history, root certificates) — from the local host or a remote host over WinRM. Saves a timestamped zip on the operator's Desktop. |
 | `Netstat_Beacon_Detection.ps1` | Polls `netstat` and logs only connections that appear or disappear between polls, to catch short-lived beacons. |
 
 ## Requirements
